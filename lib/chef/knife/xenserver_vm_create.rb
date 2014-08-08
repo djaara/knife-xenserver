@@ -18,10 +18,13 @@
 
 require 'chef/knife/xenserver_base'
 require 'singleton'
+require 'nokogiri'
 
 class Chef
   class Knife
     class XenserverVmCreate < Knife
+
+      GIB = 1024**3
 
       include Knife::XenserverBase
 
@@ -37,25 +40,25 @@ class Chef
       option :vm_template,
         :long => "--vm-template NAME",
         :description => "The Virtual Machine Template to use"
-      
+
       option :vm_name,
         :long => "--vm-name NAME",
         :description => "The Virtual Machine name"
-      
+
       option :vm_tags,
         :long => "--vm-tags tag1[,tag2..]",
         :description => "Comma separated list of tags"
-      
+
       option :chef_node_name,
         :short => "-N NAME",
         :long => "--node-name NAME",
         :description => "The Chef node name for your new node"
-      
+
       option :vm_memory,
         :long => "--vm-memory AMOUNT",
         :description => "The memory limits of the Virtual Machine",
         :default => '512'
-      
+
       option :vm_cpus,
         :long => "--vm-cpus AMOUNT",
         :description => "The VCPUs of the Virtual Machine",
@@ -85,7 +88,7 @@ class Chef
         :description => "Comma separated list of roles/recipes to apply",
         :proc => lambda { |o| o.split(/[\s,]+/) },
         :default => []
-        
+
       option :first_boot_attributes,
         :short => "-j JSON_ATTRIBS",
         :long => "--json-attributes",
@@ -98,7 +101,7 @@ class Chef
         :long => "--ssh-user USERNAME",
         :description => "The ssh username; default is 'root'",
         :default => "root"
-      
+
       option :ssh_password,
         :short => "-P PASSWORD",
         :long => "--ssh-password PASSWORD",
@@ -108,32 +111,32 @@ class Chef
         :short => "-i IDENTITY_FILE",
         :long => "--identity-file IDENTITY_FILE",
         :description => "The SSH identity file used for authentication"
-      
+
       option :host_key_verify,
         :long => "--[no-]host-key-verify",
         :description => "Disable host key verification",
         :boolean => true,
         :default => true
-      
+
       option :skip_bootstrap,
         :long => "--skip-bootstrap",
         :description => "Skip bootstrap process (Deploy only mode)",
         :boolean => true,
         :default => false,
         :proc => Proc.new { true }
-      
+
       option :keep_template_networks,
         :long => "--keep-template-networks",
         :description => "Do no remove template inherited networks (VIFs)",
         :boolean => true,
         :default => false,
         :proc => Proc.new { true }
-      
+
       option :batch,
         :long => "--batch script.yml",
         :description => "Use a batch file to deploy multiple VMs",
         :default => nil
-      
+
       option :vm_networks,
         :short => "-N network[,network..]",
         :long => "--vm-networks",
@@ -194,12 +197,14 @@ class Chef
       end
 
       def run
+        puts "#{ui.color("Running Vendavo version of knife xenserver vm create", :yellow)}"
+
         $stdout.sync = true
 
         unless config[:vm_template]
           raise "You have not provided a valid template name. (--vm-template)"
         end
-        
+
         vm_name = config[:vm_name]
         if not vm_name
           raise "Invalid Virtual Machine name (--vm-name)"
@@ -216,7 +221,7 @@ class Chef
         config[:vm_dns] ||= Chef::Config[:knife][:xenserver_default_vm_dns]
         config[:vm_domain] ||= Chef::Config[:knife][:xenserver_default_vm_domain]
 
-        template = connection.servers.templates.find do |s| 
+        template = connection.servers.templates.find do |s|
           (s.name == config[:vm_template]) or (s.uuid == config[:vm_template])
         end
 
@@ -226,8 +231,14 @@ class Chef
 
         puts "Creating VM #{config[:vm_name].yellow}..."
         puts "Using template #{template.name.yellow} [uuid: #{template.uuid}]..."
-        
+
+        affinity = check_free_ram((config[:vm_memory].to_i * 1024 * 1024).to_s)
+        raise "No enought free RAM on any of XEN Hosts" unless affinity
+        raise "No enought disk free space available..." unless check_free_disk_space_template(template)
+        raise "No enought disk free space available for extra VDIs..." unless check_free_disk_space_extra_vdis()
+
         vm = connection.servers.new :name => config[:vm_name],
+                                    :affinity => affinity,
                                     :template_name => config[:vm_template]
         vm.save :auto_start => false
         # Useful for the global exception handler
@@ -236,7 +247,7 @@ class Chef
         if not config[:keep_template_networks]
           vm.vifs.each do |vif|
             vif.destroy
-          end 
+          end
           vm.reload
         end
         if config[:vm_networks]
@@ -320,7 +331,7 @@ class Chef
             end
           end
 
-          bootstrap_for_node(vm).run 
+          bootstrap_for_node(vm).run
           puts "\n"
           puts "#{ui.color("Name", :cyan)}: #{vm.name}"
           puts "#{ui.color("IP Address", :cyan)}: #{@ssh_ip}"
@@ -338,7 +349,7 @@ class Chef
         bootstrap.name_args = [@ssh_ip]
         bootstrap.config[:run_list] = config[:run_list]
         bootstrap.config[:first_boot_attributes] = config[:first_boot_attributes]
-        bootstrap.config[:ssh_user] = config[:ssh_user] 
+        bootstrap.config[:ssh_user] = config[:ssh_user]
         bootstrap.config[:identity_file] = config[:identity_file]
         bootstrap.config[:chef_node_name] = config[:chef_node_name] || vm.name
         bootstrap.config[:bootstrap_version] = locate_config_value(:bootstrap_version)
@@ -377,7 +388,7 @@ class Chef
           # use the default SR from the first pool, othewise
           # find the SR required
           if sr.nil?
-            sr = connection.pools.first.default_sr 
+            sr = connection.pools.first.default_sr
             ui.warn "No storage repository defined for extra VDI #{count}."
             ui.warn "Using default SR from Pool: #{sr.name}"
           else
@@ -387,7 +398,7 @@ class Chef
             end
             sr = found
           end
-          
+
           # Name of the VDI
           name = "#{config[:vm_name]}-extra-vdi-#{count}"
 
@@ -399,7 +410,7 @@ class Chef
 
           begin
             # Attach the VBD
-            connection.vbds.create :server => vm, 
+            connection.vbds.create :server => vm,
                                    :vdi => vdi,
                                    :userdevice => count.to_s,
                                    :bootable => false
@@ -411,7 +422,7 @@ class Chef
           end
         end
       end
-      
+
       def create_nics(networks, macs, vm)
         net_arr = networks.split(/,/).map { |x| { :network => x } }
         nics = []
@@ -444,6 +455,139 @@ class Chef
           }
           connection.create_vif_custom c
         end
+      end
+
+      def check_free_disk_space_extra_vdis()
+        # Return if no extra VDIs were specified
+        return true unless config[:extra_vdis]
+
+        use_additional_allocation_pct = Chef::Config[:knife][:xen_use_additional_allocation_pct] || 100.0
+        count = 0
+
+        puts "Checking disk space for extra VDIs..."
+
+        vdis = config[:extra_vdis].strip.chomp.split(',')
+
+        total_sr_bsize = {}
+        vdis.each do |vdi|
+          if vdi =~ /.*:.*/
+            sr, size = vdi.split(':')
+          else #only size was specified
+            sr = nil
+            size = vdi
+          end
+          unless size =~ /^\d+$/
+            raise "Invalid VDI size. Not numeric."
+          end
+
+          # size in bytes
+          bsize = size.to_i * 1024 * 1024
+          if sr.nil?
+            total_sr_bsize['default'] ||= 0
+            total_sr_bsize['default'] += bsize
+          else
+            total_sr_bsize[sr] ||= 0
+            total_sr_bsize[sr] += bsize
+          end
+        end
+
+        return check_multi_free_disk_space(total_sr_bsize, use_additional_allocation_pct)
+      end
+
+      def check_free_disk_space_template(template)
+        puts "Checking disk space for template..."
+        use_template_allocation_pct = Chef::Config[:knife][:xen_use_template_allocation_pct] || 100.0
+
+        xml = Nokogiri::XML(template.last_booted_record)
+        vbds = xml.xpath('//member[name="VBDs"]/value/array/data/value')
+
+        bsize = 0
+        sr = nil
+
+        total_sr_bsize = {}
+        vbds.each do |vbd_r|
+          vbd = connection.vbds.find { |v| v.reference == vbd_r.text }
+          next unless vbd.type == 'Disk'
+
+          vdi = vbd.vdi
+          total_sr_bsize[vdi.sr.name] ||= 0
+          total_sr_bsize[vdi.sr.name] += vdi.virtual_size.to_i
+        end
+
+        return check_multi_free_disk_space(total_sr_bsize, use_template_allocation_pct)
+      end
+
+      def check_multi_free_disk_space(requests, allocation)
+        retval = true
+        requests.each_pair do |sr_name, bsize|
+          sr = nil
+          if sr_name == 'default'
+            sr = connection.pools.first.default_sr
+          else
+            sr = connection.storage_repositories.find { |s| s.name == sr_name }
+          end
+          unless sr
+            raise "Storage Repository #{sr_name} not available"
+          end
+          check = check_free_disk_space(sr, bsize, allocation)
+          retval &&= check
+        end
+        return retval
+      end
+
+      def check_free_disk_space(sr, size, allocation)
+        limit = Chef::Config[:knife][:xen_max_storage_allocated_pct] || 80.0
+
+        message = "  Requested allocation on %s is %.2f GiB (calculating with %.2f%% utilisation of requested disk space)" % [sr.name, size.to_f/GIB, allocation]
+        puts ui.color(message, :gray)
+
+        physical_size = sr.physical_size.to_f
+        physical_utilisation = sr.physical_utilisation.to_f + (size*(allocation/100))
+        allocated = sr.virtual_allocation.to_f + (size*(allocation/100))
+        utilization_pct = (physical_utilisation / physical_size) * 100.0;
+
+        if utilization_pct > limit
+          message = "  %s (%d GiB of %d GiB allocated; %d GiB utilised (%.2f%%); overallocation factor is %.2fx)" % [sr.name, allocated.to_i/GIB, physical_size.to_i/GIB, physical_utilisation.to_i/GIB, utilization_pct, allocated.to_f/physical_size.to_f]
+          puts ui.color(message, :red)
+          message = "  Cannot proceed with storage utilized more than %.2f%%..." % limit
+          puts ui.color(message, :red)
+          return false
+        end
+        return true
+      end
+
+      def check_free_ram(ram)
+        message = "Requested memory size is %.2f GiB..." % (ram.to_f/GIB)
+        puts message
+
+        overhead_factor = Chef::Config[:knife][:xen_vm_ram_overhead_pct] || 25
+        overhead_factor = (100.0+overhead_factor)/100.0
+
+        max_ram_utilization = Chef::Config[:knife][:xen_host_max_ram_utilization_pct] || 95
+        reserved_memory_pct = (100.0-max_ram_utilization)/100
+
+        connection.hosts.each do |host|
+          m = host.metrics
+          unless m.live
+            message = "  %s: down, skipping" % host.name
+            puts ui.color(message, :gray)
+            next
+          end
+          reserved_memory = m.memory_total.to_f * reserved_memory_pct
+          message = "  %s: %.2f GiB total memory, %.2f GiB free (%.2f GiB reserved)" % [host.name,
+            (m.memory_total.to_f/GIB),
+            (m.memory_free.to_f/GIB),
+            (reserved_memory/GIB)]
+          puts ui.color(message, :gray)
+          if (m.memory_free.to_f - (ram.to_f*overhead_factor)) >= reserved_memory
+            message = "  %s has enough free memory (%.2f GiB), setting as home server" % [host.name, (m.memory_free.to_f/GIB)]
+            puts ui.color(message, :gray)
+            return host
+          end
+        end
+        message = "  There is not any host server in pool with enough memory..."
+        puts ui.color(message, :red)
+        return nil
       end
 
     end
