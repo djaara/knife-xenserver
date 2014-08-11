@@ -566,7 +566,7 @@ class Chef
         max_ram_utilization = Chef::Config[:knife][:xen_host_max_ram_utilization_pct] || 95
         reserved_memory_pct = (100.0-max_ram_utilization)/100
 
-        connection.hosts.each do |host|
+        connection.hosts.shuffle.each do |host|
           m = host.metrics
           unless m.live
             message = "  %s: down, skipping" % host.name
