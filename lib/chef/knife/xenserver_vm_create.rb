@@ -408,17 +408,23 @@ class Chef
                                        :description => name,
                                        :virtual_size => bsize.to_s
 
-          begin
-            # Attach the VBD
-            connection.vbds.create :server => vm,
-                                   :vdi => vdi,
-                                   :userdevice => count.to_s,
-                                   :bootable => false
-          rescue => e
-            ui.error "Could not attach the VBD to the server"
-            # Try to destroy the VDI
-            vdi.destroy rescue nil
-            raise e
+          2.times do |retries|
+            begin
+              # Attach the VBD
+              connection.vbds.create :server => vm,
+                                     :vdi => vdi,
+                                     :userdevice => count.to_s,
+                                     :bootable => false
+              break
+            rescue => e
+              if retries > 0
+                ui.error "Could not attach the VBD to the server"
+                # Try to destroy the VDI
+                vdi.destroy rescue nil
+                raise e
+              end
+              count += 1
+            end
           end
         end
       end
