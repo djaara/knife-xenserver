@@ -62,6 +62,12 @@ class Chef
         :boolean => true,
         :default => true
       
+      option :tags,
+        :long => "--[no-]tags",
+        :description => "Print/Hide Tags",
+        :boolean => true,
+        :default => true
+
       option :power_state,
         :long => "--[no-]power-state",
         :description => "Print/Hide VM Power State",
@@ -72,6 +78,10 @@ class Chef
         :long => "--match REGEX",
         :description => "Print only VMs whose name matches REGEX"
       
+      option :match_tag,
+        :long => "--match-tag REGEX",
+        :description => "Print only VMs whose tags matches REGEX"
+
       def gen_headings
         headings = %w{NAME}
         if config[:mem]
@@ -89,6 +99,9 @@ class Chef
         if config[:ips]
           headings << 'IPs'
         end
+        if config[:tags]
+          headings << 'Tags'
+        end
         headings
       end
 
@@ -100,7 +113,10 @@ class Chef
           if config[:match] and vm.name !~ /#{config[:match]}/
             next
           end
-          row = [vm.uuid, vm.name] 
+          if config[:match_tag] and vm.tags.select { |tag| tag =~ /#{config[:match_tag]}/ }.empty?
+            next
+          end
+          row = [vm.uuid, vm.name]
           if vm.tools_installed?
             ips = []
             vm.guest_metrics.networks.each do |k,v|
@@ -122,9 +138,10 @@ class Chef
           row << bytes_to_megabytes(vm.memory_static_max)
           row << vm.power_state
           row << vm.tools_installed?
+          row << vm.tags
           table << row
         end
-        table
+        table.sort_by { |row| row[1] }
       end
 
       def print_table
@@ -132,7 +149,7 @@ class Chef
           t.headings = gen_headings
           gen_table.each do |row|
             # [uuid, name, [ips], [networks], mem, power, tools]
-            uuid, name, ips, networks, mem, power, tools = row
+            uuid, name, ips, networks, mem, power, tools, tags = row
             elements = []
             if config[:uuid]
               elements << "#{uuid}\n  #{ui.color('name: ', :yellow)}#{name.ljust(32)}"
@@ -144,6 +161,7 @@ class Chef
             elements << tools if config[:tools]
             elements << networks.join("\n") if config[:networks]
             elements << ips.join("\n") if config[:ips]
+            elements << tags.join("\n") if config[:tags]
             t << elements
           end
         end
@@ -172,7 +190,7 @@ class Chef
         end
 
         puts header
-        lines.each do |l| 
+        lines.each do |l|
           puts l
         end
       end
