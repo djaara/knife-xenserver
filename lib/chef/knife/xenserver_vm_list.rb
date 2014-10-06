@@ -172,7 +172,7 @@ class Chef
         lines = []
         header = ""
         gen_table.each do |row|
-          uuid, name, ips, networks, mem, power, tools = row
+          uuid, name, ips, networks, mem, power, tools, tags = row
           elements = []
           elements << name
           elements << mem if config[:mem]
@@ -180,6 +180,7 @@ class Chef
           elements << tools if config[:tools]
           elements << networks.join(";") if config[:networks]
           elements << ips.join(";") if config[:ips]
+          elements << tags.join(";") if config[:tags]
           if config[:uuid]
             header = "UUID,#{gen_headings.join(',')}"
             lines << "#{uuid},#{elements.join(',')}"
