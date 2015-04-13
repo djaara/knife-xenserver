@@ -18,7 +18,7 @@
 
 require 'chef/knife'
 $: << File.dirname(__FILE__) + "/../../../vendor/fog/lib/"
-require 'fog'
+require 'fog/xenserver'
 require 'colored'
 
 class Chef

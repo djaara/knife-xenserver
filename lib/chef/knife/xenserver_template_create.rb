@@ -207,7 +207,7 @@ class Chef
            'qos_algorithm_type' => 'ratelimit',
            'qos_algorithm_params' => {}
           }
-          connection.create_vif_custom c
+          connection.create_vif c
         end
       end
 

@@ -221,15 +221,18 @@ class Chef
         config[:vm_dns] ||= Chef::Config[:knife][:xenserver_default_vm_dns]
         config[:vm_domain] ||= Chef::Config[:knife][:xenserver_default_vm_domain]
 
-        template = connection.servers.templates.find do |s|
+        # Connect to XenServer
+        connection
+
+        puts "Creating VM #{config[:vm_name].yellow}..."
+
+        template = connection.templates.find do |s|
           (s.name == config[:vm_template]) or (s.uuid == config[:vm_template])
         end
 
         if template.nil?
           raise "Template #{config[:vm_template]} not found."
         end
-
-        puts "Creating VM #{config[:vm_name].yellow}..."
         puts "Using template #{template.name.yellow} [uuid: #{template.uuid}]..."
 
         affinity = check_free_ram((config[:vm_memory].to_i * 1024 * 1024).to_s)
@@ -237,10 +240,9 @@ class Chef
         raise "No enought disk free space available..." unless check_free_disk_space_template(template)
         raise "No enought disk free space available for extra VDIs..." unless check_free_disk_space_extra_vdis()
 
-        vm = connection.servers.new :name => config[:vm_name],
-                                    :affinity => affinity,
-                                    :template_name => config[:vm_template]
-        vm.save :auto_start => false
+        # Create VM and configure affinity
+        vm = template.clone config[:vm_name]
+        vm.affinity = affinity
         # Useful for the global exception handler
         @created_vm = vm
 
@@ -248,7 +250,7 @@ class Chef
           vm.vifs.each do |vif|
             vif.destroy
           end
-          vm.reload
+          vm = connection.servers.get vm.reference
         end
         if config[:vm_networks]
           create_nics(config[:vm_networks], config[:mac_addresses], vm)
@@ -278,7 +280,7 @@ class Chef
         # Create additional VDIs (virtual disks)
         create_extra_vdis(vm)
         vm.start
-        vm.reload
+        vm = connection.servers.get vm.reference
 
         puts "#{ui.color("VM Name", :cyan)}: #{vm.name}"
         puts "#{ui.color("VM Memory", :cyan)}: #{bytes_to_megabytes(vm.memory_static_max)} MB"
@@ -287,10 +289,7 @@ class Chef
           # wait for it to be ready to do stuff
           print "\n#{ui.color("Waiting server... ", :magenta)}"
           timeout = 180
-          found = connection.servers.all.find { |v| v.name == vm.name }
-          servers = connection.servers
           if config[:vm_ip]
-            vm.refresh
             print "\nTrying to #{'SSH'.yellow} to #{config[:vm_ip].yellow}... "
             print(".") until tcp_test_ssh(config[:vm_ip]) do
               sleep @initial_sleep_delay ||= 10; puts(" done")
@@ -299,7 +298,8 @@ class Chef
           else
             loop do
               begin
-                vm.refresh
+                vm = connection.servers.get vm.reference
+                print "networks: #{vm.guest_metrics.networks}\n" unless vm.guest_metrics.nil?
                 if not vm.guest_metrics.nil? and not vm.guest_metrics.networks.empty?
                   networks = []
                   vm.guest_metrics.networks.each do |k,v|
@@ -440,7 +440,10 @@ class Chef
         end
         networks = connection.networks
         highest_device = -1
-        vm.vifs.each { |vif| highest_device = vif.device.to_i if vif.device.to_i > highest_device }
+        vm.vifs.each do |vif|
+          next if vif.nil?
+          highest_device = vif.device.to_i if vif.device.to_i > highest_device
+        end
         nic_count = 0
         nics.each do |n|
           net = networks.find { |net| net.name == n[:network] }
@@ -459,7 +462,7 @@ class Chef
            'qos_algorithm_type' => 'ratelimit',
            'qos_algorithm_params' => {}
           }
-          connection.create_vif_custom c
+          connection.create_vif c
         end
       end
 
@@ -504,15 +507,14 @@ class Chef
         puts "Checking disk space for template..."
         use_template_allocation_pct = Chef::Config[:knife][:xen_use_template_allocation_pct] || 100.0
 
-        xml = Nokogiri::XML(template.last_booted_record)
-        vbds = xml.xpath('//member[name="VBDs"]/value/array/data/value')
+        vbds = template.vbds
 
         bsize = 0
         sr = nil
 
         total_sr_bsize = {}
-        vbds.each do |vbd_r|
-          vbd = connection.vbds.find { |v| v.reference == vbd_r.text }
+        vbds.each do |vbd|
+          next if vbd.nil?
           next unless vbd.type == 'Disk'
 
           vdi = vbd.vdi

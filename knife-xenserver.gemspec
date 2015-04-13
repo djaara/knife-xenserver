@@ -16,9 +16,9 @@ Gem::Specification.new do |s|
   s.files         = `git ls-files`.split("\n")
   s.test_files    = `git ls-files -- {test,spec,features}/*`.split("\n")
   s.executables   = `git ls-files -- bin/*`.split("\n").map{ |f| File.basename(f) }
-  s.add_dependency "fog", ">= 1.20"
   s.add_dependency "terminal-table", "~> 1.4"
   s.add_dependency "chef", "~> 11.0"
+  s.add_dependency "fog-xenserver", "~> 0.2.2"
   s.add_dependency "colored", "= 1.2"
   s.add_dependency "uuidtools", "~> 2.1"
   s.require_paths = ["lib"]
