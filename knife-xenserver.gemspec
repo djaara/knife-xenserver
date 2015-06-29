@@ -6,7 +6,7 @@ Gem::Specification.new do |s|
   s.name        = "knife-xenserver"
   s.version     = Knife::XenServer::VERSION
   s.has_rdoc    = true
-  s.authors     = ["Sergio Rubio", "Pedro Perez"]
+  s.authors     = ["Sergio Rubio", "Pedro Perez", "Jaroslav Barton"]
   s.email       = ["info@bvox.net"]
   s.homepage = "http://github.com/bvox/knife-xenserver"
   s.summary = "XenServer Support for Chef's Knife Command"
