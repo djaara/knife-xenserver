@@ -411,7 +411,7 @@ class Chef
           2.times do |retries|
             begin
               # Attach the VBD
-              connection.vbds.create :server => vm,
+              connection.vbds.create :vm => vm,
                                      :vdi => vdi,
                                      :userdevice => count.to_s,
                                      :bootable => false
